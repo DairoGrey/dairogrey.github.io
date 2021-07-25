@@ -1,0 +1,271 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dairo Grey</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@200;400;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+
+            margin: 0;
+            padding: 0;
+        }
+
+        html {
+            display: flex;
+            flex-direction: column;
+
+            color: #dfdfdf;
+        }
+
+        body {
+            flex: 1;
+
+            font: normal normal normal 16px/18px 'JetBrains Mono';
+
+            display: grid;
+            grid-template: "header" 4rem
+                           "main" 1fr;
+        }
+
+        header {
+            grid-area: header;
+
+            display: flex;
+            flex-direction: row;
+
+            background: #141414;
+
+            box-shadow: 0 4px 8px 0 #00000060;
+            z-index: 2;
+        }
+
+        .logo {
+            display: inline-flex;
+            align-items: center;
+
+            padding: 0 2rem;
+
+            height: 4rem;
+            font-size: 1.4rem;
+            font-weight: 600;
+        }
+
+        main {
+            position: relative;
+
+            grid-area: main;
+
+            display: flex;
+            flex-direction: column;
+
+            background: #141414;
+        }
+
+        .code-background {
+            position: absolute;
+
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            overflow: hidden;
+        }
+
+        .code-background > code {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .code-background:after {
+            content: '';
+
+            position: absolute;
+
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+
+            background: linear-gradient(to top, #141414 0%, #141414e0 50%, #141414 100%);
+        }
+
+        .cxx {
+            flex: 1;
+
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-around;
+
+            font-size: 25rem;
+            font-weight: 600;
+
+            text-shadow: 0 0 48px #141414,  0 0 48px #141414,  0 0 48px #141414;
+
+            z-index: 1;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <span class="logo">Dairo Grey</span>
+    </header>
+    <main>
+        <div class="code-background">
+            <code>
+                <pre>
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+    *
+    *  Bluetooth support for Intel devices
+    *
+    *  Copyright (C) 2015  Intel Corporation
+    */
+
+#include &lt;linux/module.h&gt;
+#include &lt;linux/firmware.h&gt;
+#include &lt;linux/regmap.h&gt;
+#include &lt;asm/unaligned.h&gt;
+
+#include &lt;net/bluetooth/bluetooth.h&gt;
+#include &lt;net/bluetooth/hci_core.h&gt;
+
+#include "btintel.h"
+
+#define VERSION "0.1"
+
+#define BDADDR_INTEL        (&(bdaddr_t){{0x00, 0x8b, 0x9e, 0x19, 0x03, 0x00}})
+#define RSA_HEADER_LEN      644
+#define CSS_HEADER_OFFSET   8
+#define ECDSA_OFFSET        644
+#define ECDSA_HEADER_LEN    320
+
+#define CMD_WRITE_BOOT_PARAMS   0xfc0e
+struct cmd_write_boot_params {
+    u32 boot_addr;
+    u8  fw_build_num;
+    u8  fw_build_ww;
+    u8  fw_build_yy;
+} __packed;
+
+int btintel_check_bdaddr(struct hci_dev *hdev)
+{
+    struct hci_rp_read_bd_addr *bda;
+    struct sk_buff *skb;
+
+    skb = __hci_cmd_sync(hdev, HCI_OP_READ_BD_ADDR, 0, NULL,
+                    HCI_INIT_TIMEOUT);
+    if (IS_ERR(skb)) {
+        int err = PTR_ERR(skb);
+        bt_dev_err(hdev, "Reading Intel device address failed (%d)",
+                err);
+        return err;
+    }
+
+    if (skb->len != sizeof(*bda)) {
+        bt_dev_err(hdev, "Intel device address length mismatch");
+        kfree_skb(skb);
+        return -EIO;
+    }
+
+    bda = (struct hci_rp_read_bd_addr *)skb->data;
+
+    /* For some Intel based controllers, the default Bluetooth device
+        * address 00:03:19:9E:8B:00 can be found. These controllers are
+        * fully operational, but have the danger of duplicate addresses
+        * and that in turn can cause problems with Bluetooth operation.
+        */
+    if (!bacmp(&bda->bdaddr, BDADDR_INTEL)) {
+        bt_dev_err(hdev, "Found Intel default device address (%pMR)",
+                &bda->bdaddr);
+        set_bit(HCI_QUIRK_INVALID_BDADDR, &hdev->quirks);
+    }
+
+    kfree_skb(skb);
+
+    return 0;
+}
+EXPORT_SYMBOL_GPL(btintel_check_bdaddr);
+
+int btintel_enter_mfg(struct hci_dev *hdev)
+{
+    static const u8 param[] = { 0x01, 0x00 };
+    struct sk_buff *skb;
+
+    skb = __hci_cmd_sync(hdev, 0xfc11, 2, param, HCI_CMD_TIMEOUT);
+    if (IS_ERR(skb)) {
+        bt_dev_err(hdev, "Entering manufacturer mode failed (%ld)",
+               PTR_ERR(skb));
+        return PTR_ERR(skb);
+    }
+    kfree_skb(skb);
+
+    return 0;
+}
+EXPORT_SYMBOL_GPL(btintel_enter_mfg);
+
+int btintel_exit_mfg(struct hci_dev *hdev, bool reset, bool patched)
+{
+    u8 param[] = { 0x00, 0x00 };
+    struct sk_buff *skb;
+
+    /* The 2nd command parameter specifies the manufacturing exit method:
+     * 0x00: Just disable the manufacturing mode (0x00).
+     * 0x01: Disable manufacturing mode and reset with patches deactivated.
+     * 0x02: Disable manufacturing mode and reset with patches activated.
+     */
+    if (reset)
+        param[1] |= patched ? 0x02 : 0x01;
+
+    skb = __hci_cmd_sync(hdev, 0xfc11, 2, param, HCI_CMD_TIMEOUT);
+    if (IS_ERR(skb)) {
+        bt_dev_err(hdev, "Exiting manufacturer mode failed (%ld)",
+               PTR_ERR(skb));
+        return PTR_ERR(skb);
+    }
+    kfree_skb(skb);
+
+    return 0;
+}
+EXPORT_SYMBOL_GPL(btintel_exit_mfg);
+
+int btintel_set_bdaddr(struct hci_dev *hdev, const bdaddr_t *bdaddr)
+{
+    struct sk_buff *skb;
+    int err;
+
+    skb = __hci_cmd_sync(hdev, 0xfc31, 6, bdaddr, HCI_INIT_TIMEOUT);
+    if (IS_ERR(skb)) {
+        err = PTR_ERR(skb);
+        bt_dev_err(hdev, "Changing Intel device address failed (%d)",
+               err);
+        return err;
+    }
+    kfree_skb(skb);
+
+    return 0;
+}
+EXPORT_SYMBOL_GPL(btintel_set_bdaddr);
+                </pre>
+            </code>
+        </div>
+        <div class="cxx">
+            cxx
+        </div>
+    </main>
+</body>
+</html>
